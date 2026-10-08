@@ -26,6 +26,13 @@ jobs:
       - name: Test matching
         run: python -m pytest -q
 
+      - name: Drop parts the app never uses (keeps the .exe small)
+        shell: pwsh
+        run: |
+          # OpenCV's video/ffmpeg library is ~25 MB and only needed for video files
+          $cv2 = python -c "import cv2, os; print(os.path.dirname(cv2.__file__))"
+          Get-ChildItem $cv2 -Filter "opencv_videoio_ffmpeg*.dll" | Remove-Item -Verbose
+
       - name: Build
         run: >
           pyinstaller --noconfirm --onefile --windowed
@@ -34,7 +41,13 @@ jobs:
           --add-data "assets;assets"
           --hidden-import pynput.keyboard._win32
           --hidden-import pynput.mouse._win32
+          --exclude-module PIL
+          --exclude-module pyscreeze
           gui.py
+
+      - name: Show .exe size
+        shell: pwsh
+        run: '"{0:N1} MB" -f ((Get-Item dist\PhotoClicker.exe).Length / 1MB)'
 
       - name: Check the .exe starts
         shell: pwsh
