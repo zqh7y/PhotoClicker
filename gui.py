@@ -114,8 +114,11 @@ class ClickerThread(threading.Thread):
     """Watches the screen and clicks. Talks to the window through `events`."""
 
     def __init__(self, images, confidence, interval, click_all, any_size, any_color,
-                 move_time, clicks, events):
+                 move_time, clicks, events, spots=None, cps=10, start_delay=START_DELAY):
         super().__init__(daemon=True)
+        self.spots = spots  # [(x, y), ...]: just keep clicking these points in turn
+        self.cps = cps
+        self.start_delay = start_delay
         self.move_time = move_time
         self.clicks = clicks
         self.any_color = any_color
@@ -144,13 +147,16 @@ class ClickerThread(threading.Thread):
         pyautogui.PAUSE = 0.02
         pyautogui.FAILSAFE = True  # mouse into a screen corner = emergency stop
 
-        finders = [Finder(*load_template(path), scales=self.scales, shape=self.any_color)
-                   for path in self.images]
+        finders = [] if self.spots else [
+            Finder(*load_template(path), scales=self.scales, shape=self.any_color)
+            for path in self.images]
 
-        for left in range(START_DELAY, 0, -1):
+        for left in range(self.start_delay, 0, -1):
             self.events.put(("status", (f"Starting in {left}...", "Open your game now")))
             if self.stop_event.wait(1):
                 return
+        if self.spots:
+            return self._run_spots(pyautogui)
         self.events.put(("status", ("Looking for your picture...",
                                     f"Press {HOTKEY.upper()} to stop")))
 
@@ -175,6 +181,23 @@ class ClickerThread(threading.Thread):
                         clicks += 1
                         self.events.put(("click", clicks))
                 self.stop_event.wait(self.interval)
+
+    def _run_spots(self, pyautogui):
+        """Regular auto clicker: click the chosen points one after another."""
+        what = "your spot" if len(self.spots) == 1 else f"your {len(self.spots)} spots"
+        self.events.put(("status", (f"Clicking {what}...", f"Press {HOTKEY.upper()} to stop")))
+        gap = 1 / max(1, self.cps)
+        clicks = 0
+        next_at = time.perf_counter()
+        while not self.stop_event.is_set():
+            x, y = self.spots[clicks % len(self.spots)]
+            # glide there only when the mouse isn't already on the spot
+            here = tuple(pyautogui.position()) == (x, y)
+            click(pyautogui, x, y, "left", 1, 0 if here else self.move_time)
+            clicks += 1
+            self.events.put(("click", clicks))
+            next_at = max(next_at + gap, time.perf_counter())
+            self.stop_event.wait(next_at - time.perf_counter())
 
 
 # ---------------------------------------------------------------------------
@@ -319,9 +342,14 @@ class App:
         self.any_color = tk.BooleanVar(value=True)
         self.move_time = tk.DoubleVar(value=0.05)
         self.clicks_each = tk.IntVar(value=2)
+        self.mode = tk.StringVar(value="picture")
+        self.cps = tk.IntVar(value=10)
+        self.spots = []
 
         self.build()
         self.load_settings()
+        self.set_mode(self.mode.get())
+        self.show_spots()
         self.show_pictures()
         self.start_hotkey()
         root.protocol("WM_DELETE_WINDOW", self.close)
@@ -346,11 +374,52 @@ class App:
         root = self.root
         tk.Label(root, text=APP_NAME, bg=BG, fg=TEXT,
                  font=(FONT, 22, "bold")).pack(anchor="w", padx=20, pady=(18, 0))
-        tk.Label(root, text="Clicks your picture every time it shows up on the screen.",
-                 bg=BG, fg=MUTED, font=(FONT, 10)).pack(anchor="w", padx=20, pady=(0, 14))
+        tk.Label(root, text="Clicks your picture every time it shows up, or keeps "
+                 "clicking one spot.", bg=BG, fg=MUTED, font=(FONT, 10)
+                 ).pack(anchor="w", padx=20, pady=(0, 10))
+
+        # Mode: find a picture, or click one spot
+        modes = tk.Frame(root, bg=BG)
+        modes.pack(fill="x", padx=20, pady=(0, 14))
+        self.mode_btns = {}
+        for mode, text in (("picture", "Find a picture"), ("spot", "Click one spot")):
+            btn = flat_button(modes, text, lambda m=mode: self.set_mode(m), LIGHT_BTN,
+                              LIGHT_BTN_HOVER, fg=ACCENT, size=10, padx=14, pady=6)
+            btn.pack(side="left", padx=(0, 8))
+            self.mode_btns[mode] = btn
+
+        # Step 1 (spot mode): pick the point
+        spot = self.card(1, "Choose the spots to click")
+        self.spot_card = spot.master
+        row = tk.Frame(spot, bg=CARD)
+        row.pack(fill="x")
+        flat_button(row, "Add a spot", self.pick_spot, ACCENT, ACCENT_HOVER,
+                    padx=14, pady=8).pack(side="left")
+        flat_button(row, "Clear", self.clear_spots, LIGHT_BTN, LIGHT_BTN_HOVER,
+                    fg=ACCENT, padx=14, pady=8).pack(side="left", padx=8)
+        self.spot_label = tk.Label(spot, text="", bg=CARD, fg=TEXT, font=(FONT, 10),
+                                   wraplength=380, justify="left")
+        self.spot_label.pack(anchor="w", pady=(10, 0))
+        tk.Label(spot, text="Press \"Add a spot\", then click anywhere on the screen. Add more "
+                 "spots and it clicks them one after another.", bg=CARD, fg=MUTED,
+                 font=(FONT, 9), wraplength=380, justify="left").pack(anchor="w", pady=(6, 0))
+        speed = tk.Frame(spot, bg=CARD)
+        speed.pack(fill="x", pady=(10, 0))
+        tk.Label(speed, text="Clicks per second", bg=CARD, fg=TEXT,
+                 font=(FONT, 10, "bold")).pack(side="left")
+        cps_value = tk.Label(speed, text=str(self.cps.get()), bg=CARD, fg=ACCENT,
+                             font=(FONT, 10, "bold"), width=3)
+        cps_value.pack(side="left", padx=4)
+        tk.Scale(speed, from_=1, to=30, orient="horizontal", variable=self.cps,
+                 showvalue=False, bg=CARD, troughcolor=BORDER, highlightthickness=0, bd=0,
+                 sliderrelief="flat", activebackground=ACCENT, length=200, sliderlength=22,
+                 width=12, command=lambda _: (cps_value.configure(text=str(self.cps.get())),
+                                              self.save_settings())).pack(side="left", padx=6)
+        self.spot_card.pack_forget()
 
         # Step 1: pictures
         step1 = self.card(1, "Choose what to click")
+        self.picture_card = step1.master
         row = tk.Frame(step1, bg=CARD)
         row.pack(fill="x")
         flat_button(row, "Take from screen", self.take_from_screen, ACCENT, ACCENT_HOVER,
@@ -362,6 +431,7 @@ class App:
 
         # Step 2: start
         step2 = self.card(2, "Press Start, then open your game")
+        self.start_card = step2.master
         self.start_btn = flat_button(step2, "START", self.toggle, GREEN, GREEN_HOVER,
                                      size=18, pady=12)
         self.start_btn.pack(fill="x")
@@ -422,6 +492,56 @@ class App:
                            command=self.save_settings).pack(anchor="w", pady=(6, 0))
         tk.Label(frame, text="Emergency stop: push the mouse into any corner of the screen.",
                  bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(10, 0))
+
+    def set_mode(self, mode):
+        self.mode.set(mode)
+        for name, btn in self.mode_btns.items():
+            if name == mode:
+                btn.configure(bg=ACCENT, fg="white", activeforeground="white")
+                recolor(btn, ACCENT, ACCENT_HOVER)
+            else:
+                btn.configure(bg=LIGHT_BTN, fg=ACCENT, activeforeground=ACCENT)
+                recolor(btn, LIGHT_BTN, LIGHT_BTN_HOVER)
+        shown, hidden = ((self.spot_card, self.picture_card) if mode == "spot"
+                         else (self.picture_card, self.spot_card))
+        hidden.pack_forget()
+        shown.pack(fill="x", padx=20, pady=(0, 14), before=self.start_card)
+        self.save_settings()
+
+    def show_spots(self):
+        if not self.spots:
+            text = "No spots yet"
+        else:
+            text = "  ".join(f"{i}. ({x}, {y})" for i, (x, y) in enumerate(self.spots, 1))
+        self.spot_label.configure(text=text)
+
+    def clear_spots(self):
+        self.spots = []
+        self.show_spots()
+        self.save_settings()
+
+    def pick_spot(self):
+        try:
+            from pynput import mouse
+        except ImportError:
+            return
+        self.root.iconify()
+
+        def on_click(x, y, button, pressed):
+            if pressed and button == mouse.Button.left:
+                self.root.after(0, self.got_spot, (int(x), int(y)))
+                return False  # stop listening
+
+        def listen():
+            mouse.Listener(on_click=on_click).start()
+
+        self.root.after(300, listen)  # let go of the button first
+
+    def got_spot(self, spot):
+        self.spots.append(spot)
+        self.show_spots()
+        self.save_settings()
+        self.root.deiconify()
 
     def toggle_settings(self):
         self.settings_open = not self.settings_open
@@ -518,14 +638,19 @@ class App:
             self.worker.stop()
             self.set_status("Stopping...", "")
             return
-        if not self.pictures:
+        spots = list(self.spots) if self.mode.get() == "spot" else None
+        if self.mode.get() == "spot" and not spots:
+            messagebox.showinfo(APP_NAME, "First add a spot to click (step 1).")
+            return
+        if not spots and not self.pictures:
             messagebox.showinfo(APP_NAME, "First choose what to click (step 1).")
             return
         self.save_settings()
         self.worker = ClickerThread(list(self.pictures), self.confidence.get() / 100,
                                     max(0.0, self.interval.get()), self.click_all.get(),
                                     self.any_size.get(), self.any_color.get(),
-                                    self.move_time.get(), self.clicks_each.get(), self.events)
+                                    self.move_time.get(), self.clicks_each.get(), self.events,
+                                    spots=spots, cps=self.cps.get())
         self.worker.start()
         self.clicks = 0
         self.start_btn.configure(text="STOP")
@@ -611,6 +736,9 @@ class App:
         self.any_size.set(data.get("any_size", True))
         self.any_color.set(data.get("any_color", True))
         self.clicks_each.set(data.get("clicks", 2))
+        self.mode.set(data.get("mode", "picture"))
+        self.cps.set(data.get("cps", 10))
+        self.spots = [tuple(p) for p in data.get("spots", [])]
 
     def save_settings(self):
         data = {
@@ -623,6 +751,9 @@ class App:
             "any_color": self.any_color.get(),
             "move_time": round(self.move_time.get(), 2),
             "clicks": self.clicks_each.get(),
+            "mode": self.mode.get(),
+            "cps": self.cps.get(),
+            "spots": [list(p) for p in self.spots],
         }
         try:
             self.settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -658,12 +789,39 @@ def selftest():
         App(root)
         root.update()
         root.destroy()
+        spot = spot_selftest()
         out.write_text(f"OK screen {shot.shape[1]}x{shot.shape[0]}, one look {per_look:.0f} ms, "
-                       f"mouse glided to {mouse_at} (asked 200,150)", encoding="utf-8")
+                       f"mouse glided to {mouse_at} (asked 200,150), spot clicker: {spot}",
+                       encoding="utf-8")
         return 0
     except Exception:
         out.write_text(traceback.format_exc(), encoding="utf-8")
         return 1
+
+
+def spot_selftest():
+    """Run the one-spot clicker for a second at 10 clicks per second and count
+    the real clicks that land on the spot."""
+    from pynput import mouse
+    landed = []
+    def on_click(x, y, button, pressed):
+        if pressed:
+            landed.append((int(x), int(y)))
+
+    listener = mouse.Listener(on_click=on_click)
+    listener.start()
+    time.sleep(0.3)
+    worker = ClickerThread([], 0.7, 0, False, True, True, 0.05, 1, queue.Queue(),
+                           spots=[(300, 250)], cps=10, start_delay=0)
+    worker.start()
+    time.sleep(1.0)
+    worker.stop()
+    worker.join(2)
+    time.sleep(0.2)
+    listener.stop()
+    on_spot = [p for p in landed if p == (300, 250)]
+    assert 8 <= len(on_spot) <= 12, f"expected about 10 clicks on 300,250, got {landed}"
+    return f"{len(on_spot)} clicks in 1 s on 300,250"
 
 
 def main():

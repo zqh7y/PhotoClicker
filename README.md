@@ -19,6 +19,11 @@ that picture on your screen and clicks its center whenever it shows up.
    which is why it glides.
 4. Press **P** to stop. Pushing the mouse into a screen corner also stops it.
 
+**Click one spot (regular auto clicker):** press **Click one spot** at the
+top, then **Add a spot** and click anywhere on the screen. Add more spots
+and it clicks them one after another. Set the speed with "Clicks per
+second", then press **START** (or **P**). **Clear** removes the spots.
+
 By default it matches the picture's shape, not its colors, so a button
 that changes color (pink, white, on a grey or purple background...) is
 still found. Untick "Find it in any color" in **Settings** to match colors
