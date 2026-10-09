@@ -1,3 +1,14 @@
+<p align="center">
+  <img src=".github/assets/banner.png" alt="PhotoClicker, a Windows auto clicker that finds a picture on screen" width="100%">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Windows-.exe-0b0b0c?style=flat-square&logo=windows&logoColor=white" alt="Windows .exe">
+  <img src="https://img.shields.io/badge/Python-3.9%2B-0b0b0c?style=flat-square&logo=python&logoColor=white" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/OpenCV-template%20matching-0b0b0c?style=flat-square&logo=opencv&logoColor=white" alt="OpenCV">
+  <img src="https://github.com/zqh7y/PhotoClicker/actions/workflows/build-exe.yml/badge.svg" alt="Build PhotoClicker.exe">
+</p>
+
 # PhotoClicker
 Simple Windows auto clicker that finds a picture on your screen (in any color) and clicks it.
 
@@ -5,6 +16,10 @@ Simple Windows auto clicker that finds a picture on your screen (in any color) a
 
 Give it a picture of a button (or anything else), and it keeps looking for
 that picture on your screen and clicks its center whenever it shows up.
+
+<p align="center">
+  <img src=".github/assets/screens.png" alt="The PhotoClicker window: find a picture, click one spot, and the settings" width="100%">
+</p>
 
 ## Easy way: PhotoClicker.exe (Windows)
 
